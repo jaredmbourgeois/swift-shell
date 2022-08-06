@@ -10,13 +10,16 @@ public enum Shell {
   }
 }
 
+public protocol ShellExecutor {
+  func `do`(_ command: String) async -> Shell.Result
+  func sudo(_ command: String, password: String) async -> Shell.Result
+}
+
 extension Shell {
-  public actor Executor {
+  public actor Executor: ShellExecutor {
     public nonisolated let shellPath: String
 
-    public init(
-      shellPath: String = Shell.defaultShellPath
-    ) {
+    public init(shellPath: String = Shell.defaultShellPath) {
       self.shellPath = shellPath
     }
   }
