@@ -28,7 +28,7 @@ let package = Package(
             dependencies: []
         ),
         .testTarget(
-            name: "ShellTests",
+            name: "ShellTest",
             dependencies: ["Shell"]
         ),
     ]
