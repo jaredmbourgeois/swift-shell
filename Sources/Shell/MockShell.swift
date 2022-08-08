@@ -2,9 +2,12 @@ import Foundation
 
 public class MockShell: ShellExecutor {
   public typealias ActionHandler = (MockShell.Action) -> Void
-  public private(set) var actions = [MockShell.Action]()
+  private var _actions = DispatchedValue<[MockShell.Action]>([])
+  public var actions: [MockShell.Action] {
+    _actions.value
+  }
   public var lastAction: MockShell.Action? {
-    actions.last
+    _actions.value.last
   }
 
   private let commandHandlers: [CommandHandler]
@@ -19,7 +22,7 @@ public class MockShell: ShellExecutor {
   }
 
   public func clear() {
-    actions = []
+    _actions.value = []
   }
 
   public func `do`(_ command: String) async -> Shell.Result {
@@ -35,7 +38,7 @@ public class MockShell: ShellExecutor {
   }
 
   private func handleAction(_ action: MockShell.Action) {
-    actions.append(action)
+    _actions.value.append(action)
     actionHandler?(action)
   }
 }
