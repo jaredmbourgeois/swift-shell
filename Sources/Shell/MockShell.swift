@@ -1,15 +1,21 @@
 import Foundation
 
 public class MockShell: ShellExecutor {
+  public typealias ActionHandler = (MockShell.Action) -> Void
   public private(set) var actions = [MockShell.Action]()
   public var lastAction: MockShell.Action? {
     actions.last
   }
 
-  private let handlers: [CommandHandler]
+  private let commandHandlers: [CommandHandler]
+  private let actionHandler: ActionHandler?
 
-  public init(_ handlers: [CommandHandler]) {
-    self.handlers = handlers
+  public init(
+    _ commandHandlers: [CommandHandler],
+    actionHandler: ActionHandler?
+  ) {
+    self.commandHandlers = commandHandlers
+    self.actionHandler = actionHandler
   }
 
   public func clear() {
@@ -17,23 +23,32 @@ public class MockShell: ShellExecutor {
   }
 
   public func `do`(_ command: String) async -> Shell.Result {
-    let result = handlers.compactMap { $0.do(command) }.first ?? .failure
-    actions.append(.do(command, result))
+    let result = commandHandlers.compactMap { $0.do(command) }.first ?? .failure
+    handleAction(.do(command, result))
     return result
   }
 
   public func sudo(_ command: String, password: String) async -> Shell.Result {
-    let result = handlers.compactMap { $0.sudo(command, password: password) }.first ?? .failure
-    actions.append(.sudo(command, password, result))
+    let result = commandHandlers.compactMap { $0.sudo(command, password: password) }.first ?? .failure
+    handleAction(.sudo(command, password, result))
     return result
+  }
+
+  private func handleAction(_ action: MockShell.Action) {
+    actions.append(action)
+    actionHandler?(action)
   }
 }
 
 extension MockShell {
   public enum CommandHandler {
-    case `do`(ResultForDo)
-    case sudo(ResultForSudo)
-    case all(ResultForAll)
+    case `do`(Do)
+    case sudo(Sudo)
+    case all(All)
+
+    public typealias Do = (String) -> Shell.Result?
+    public typealias Sudo = (String,String) -> Shell.Result?
+    public typealias All = (String,String?) -> Shell.Result?
 
     public func `do`(_ command: String) -> Shell.Result? {
       switch self {
@@ -51,9 +66,6 @@ extension MockShell {
       }
     }
   }
-  public typealias ResultForDo = (String) -> Shell.Result?
-  public typealias ResultForSudo = (String,String) -> Shell.Result?
-  public typealias ResultForAll = (String,String?) -> Shell.Result?
 }
 
 extension MockShell {
