@@ -31,9 +31,9 @@ public class MockShell: ShellExecutor {
     return result
   }
 
-  public func sudo(_ command: String, password: String) async -> Shell.Result {
-    let result = commandHandlers.compactMap { $0.sudo(command, password: password) }.first ?? .failure
-    handleAction(.sudo(command, password, result))
+  public func sudo(_ command: String) async -> Shell.Result {
+    let result = commandHandlers.compactMap { $0.sudo(command) }.first ?? .failure
+    handleAction(.sudo(command, result))
     return result
   }
 
@@ -50,22 +50,22 @@ extension MockShell {
     case all(All)
 
     public typealias Do = (String) -> Shell.Result?
-    public typealias Sudo = (String,String) -> Shell.Result?
-    public typealias All = (String,String?) -> Shell.Result?
+    public typealias Sudo = (String) -> Shell.Result?
+    public typealias All = (String) -> Shell.Result?
 
     public func `do`(_ command: String) -> Shell.Result? {
       switch self {
       case .`do`(let handler): return handler(command)
       case .sudo: return nil
-      case .all(let handler): return handler(command, nil)
+      case .all(let handler): return handler(command)
       }
     }
 
-    public func sudo(_ command: String, password: String) -> Shell.Result? {
+    public func sudo(_ command: String) -> Shell.Result? {
       switch self {
       case .`do`: return nil
-      case .sudo(let handler): return handler(command, password)
-      case .all(let handler): return handler(command, password)
+      case .sudo(let handler): return handler(command)
+      case .all(let handler): return handler(command)
       }
     }
   }
@@ -74,26 +74,19 @@ extension MockShell {
 extension MockShell {
   public enum Action {
     case `do`(String,Shell.Result)
-    case sudo(String,String,Shell.Result)
+    case sudo(String,Shell.Result)
 
     public var command: String {
       switch self {
       case .`do`(let command, _): return command
-      case .sudo(let command, _, _): return command
-      }
-    }
-
-    public var password: String? {
-      switch self {
-      case .`do`: return nil
-      case .sudo(_, let password, _): return password
+      case .sudo(let command, _): return command
       }
     }
 
     public var result: Shell.Result {
       switch self {
       case .`do`(_, let result): return result
-      case .sudo(_, _, let result): return result
+      case .sudo(_, let result): return result
       }
     }
   }

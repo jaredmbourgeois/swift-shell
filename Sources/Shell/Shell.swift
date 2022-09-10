@@ -12,7 +12,7 @@ public enum Shell {
 
 public protocol ShellExecutor {
   func `do`(_ command: String) async -> Shell.Result
-  func sudo(_ command: String, password: String) async -> Shell.Result
+  func sudo(_ command: String) async -> Shell.Result
 }
 
 extension Shell {
@@ -27,24 +27,20 @@ extension Shell {
 
 extension Shell.Executor {
   public func `do`(_ command: String) async -> Shell.Result {
-    await shellProcess(command: command)
+    await shellProcess(command)
   }
 
-  public func sudo(_ command: String, password: String) async -> Shell.Result {
-    await shellProcess(command: command, password: password)
+  public func sudo(_ command: String) async -> Shell.Result {
+    await shellProcess(command)
   }
 
-  private func shellProcess(
-    command: String,
-    password: String? = nil
-  ) async -> Shell.Result {
+  private func shellProcess(_ command: String) async -> Shell.Result {
     let process = Process()
     process.launchPath = shellPath
     let outputPipe = Pipe()
     let errorPipe = Pipe()
     process.standardOutput = outputPipe
     process.standardError = errorPipe
-    process.standardInput = password
     process.arguments = ["-c", command]
     process.launch()
     process.waitUntilExit()
