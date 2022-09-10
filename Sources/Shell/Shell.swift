@@ -35,15 +35,22 @@ extension Shell.Executor {
   }
 
   private func shellProcess(_ command: String) async -> Shell.Result {
+    guard let shellUrl = URL(string: shellPath) else {
+      return .error("Invalid shellPath: \(shellPath)")
+    }
     let process = Process()
-    process.launchPath = shellPath
+    process.executableURL = shellUrl
     let outputPipe = Pipe()
     let errorPipe = Pipe()
     process.standardOutput = outputPipe
     process.standardError = errorPipe
     process.arguments = ["-c", command]
-    process.launch()
-    process.waitUntilExit()
+    do {
+      try process.run()
+      process.waitUntilExit()
+    } catch {
+      return .error(error.localizedDescription)
+    }
     guard process.terminationStatus == 0 else { return .failure }
     if let output = String(
       data: outputPipe.fileHandleForReading.readDataToEndOfFile(),
