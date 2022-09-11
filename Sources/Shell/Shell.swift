@@ -7,12 +7,22 @@ public enum Shell {
     case output(String)
     case error(String)
     case failure
+
+    public var description: String {
+      switch self {
+      case .output(let string): return string
+      case .error(let string): return string
+      case .failure: return "failure"
+      }
+    }
   }
 }
 
 public protocol ShellExecutor {
   func `do`(_ command: String) async -> Shell.Result
+  func doSynchronously(_ command: String) -> Shell.Result
   func sudo(_ command: String) async -> Shell.Result
+  func sudoSynchronously(_ command: String) -> Shell.Result
 }
 
 extension Shell {
@@ -27,17 +37,26 @@ extension Shell {
 
 extension Shell.Executor {
   public func `do`(_ command: String) async -> Shell.Result {
-    await shellProcess(command)
+    shellProcess(command)
   }
+
+  nonisolated public func doSynchronously(_ command: String) -> Shell.Result {
+    shellProcess(command)
+  }
+
 
   public func sudo(_ command: String) async -> Shell.Result {
-    await shellProcess(command)
+    shellProcess(command)
   }
 
-  private func shellProcess(_ command: String) async -> Shell.Result {
-    guard let shellUrl = URL(string: shellPath) else {
-      return .error("Invalid shellPath: \(shellPath)")
-    }
+  nonisolated public func sudoSynchronously(_ command: String) -> Shell.Result {
+    shellProcess(command)
+  }
+
+  nonisolated
+  private func shellProcess(_ command: String) -> Shell.Result {
+    var result: Shell.Result = .failure
+    let shellUrl = URL(fileURLWithPath: shellPath)
     let process = Process()
     process.executableURL = shellUrl
     let outputPipe = Pipe()
@@ -49,21 +68,22 @@ extension Shell.Executor {
       try process.run()
       process.waitUntilExit()
     } catch {
-      return .error(error.localizedDescription)
+      result = .error(error.localizedDescription)
     }
     guard process.terminationStatus == 0 else { return .failure }
     if let output = String(
       data: outputPipe.fileHandleForReading.readDataToEndOfFile(),
       encoding: .utf8
     ) {
-      return .output(output)
+      result = .output(output)
     }
     if let error = String(
       data: errorPipe.fileHandleForReading.readDataToEndOfFile(),
       encoding: .utf8
     ) {
-      return .error(error)
+      result = .error(error)
     }
-    return .failure
+    print("swift-shell\n\tcommand: \(command)\n\tresult: \(result.description)")
+    return result
   }
 }

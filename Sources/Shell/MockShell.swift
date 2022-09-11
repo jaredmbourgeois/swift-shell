@@ -31,7 +31,19 @@ public class MockShell: ShellExecutor {
     return result
   }
 
+  public func doSynchronously(_ command: String) -> Shell.Result {
+    let result = commandHandlers.compactMap { $0.do(command) }.first ?? .failure
+    handleAction(.do(command, result))
+    return result
+  }
+
   public func sudo(_ command: String) async -> Shell.Result {
+    let result = commandHandlers.compactMap { $0.sudo(command) }.first ?? .failure
+    handleAction(.sudo(command, result))
+    return result
+  }
+
+  public func sudoSynchronously(_ command: String) -> Shell.Result {
     let result = commandHandlers.compactMap { $0.sudo(command) }.first ?? .failure
     handleAction(.sudo(command, result))
     return result
