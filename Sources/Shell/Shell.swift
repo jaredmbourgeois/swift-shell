@@ -24,11 +24,11 @@ public protocol ShellExecutor: Sendable {
 }
 
 extension ShellExecutor {
-  func `do`(_ command: String) async -> Shell.Result {
+  public func `do`(_ command: String) async -> Shell.Result {
     await `do`(command, taskPriority: nil)
   }
 
-  func sudo(_ command: String) async -> Shell.Result {
+  public func sudo(_ command: String) async -> Shell.Result {
     await sudo(command, taskPriority: nil)
   }
 }
