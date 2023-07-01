@@ -1,13 +1,25 @@
 import Foundation
 
 public class MockShell: ShellExecutor {
-  public typealias ActionHandler = (MockShell.Action) -> Void
-  private var _actions = DispatchedValue<[MockShell.Action]>([])
-  public var actions: [MockShell.Action] {
-    _actions.value
+  public typealias ActionHandler = @Sendable (MockShell.Action) -> Void
+
+  private let _actionsLock = NSRecursiveLock()
+  private var _actions = [MockShell.Action]()
+  public private(set) var actions: [MockShell.Action] {
+    get {
+      _actionsLock.lock()
+      let value = _actions
+      _actionsLock.unlock()
+      return value
+    }
+    set {
+      _actionsLock.lock()
+      _actions = newValue
+      _actionsLock.unlock()
+    }
   }
   public var lastAction: MockShell.Action? {
-    _actions.value.last
+    actions.last
   }
 
   private let commandHandlers: [CommandHandler]
@@ -22,35 +34,23 @@ public class MockShell: ShellExecutor {
   }
 
   public func clear() {
-    _actions.value = []
+    actions = []
   }
 
-  public func `do`(_ command: String) async -> Shell.Result {
+  public func `do`(_ command: String, taskPriority: TaskPriority?) async -> Shell.Result {
     let result = commandHandlers.compactMap { $0.do(command) }.first ?? .failure
     handleAction(.do(command, result))
     return result
   }
 
-  public func doSynchronously(_ command: String) -> Shell.Result {
-    let result = commandHandlers.compactMap { $0.do(command) }.first ?? .failure
-    handleAction(.do(command, result))
-    return result
-  }
-
-  public func sudo(_ command: String) async -> Shell.Result {
-    let result = commandHandlers.compactMap { $0.sudo(command) }.first ?? .failure
-    handleAction(.sudo(command, result))
-    return result
-  }
-
-  public func sudoSynchronously(_ command: String) -> Shell.Result {
+  public func sudo(_ command: String, taskPriority: TaskPriority?) async -> Shell.Result {
     let result = commandHandlers.compactMap { $0.sudo(command) }.first ?? .failure
     handleAction(.sudo(command, result))
     return result
   }
 
   private func handleAction(_ action: MockShell.Action) {
-    _actions.value.append(action)
+    actions.append(action)
     actionHandler?(action)
   }
 }
