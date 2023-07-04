@@ -1,6 +1,6 @@
 import Foundation
 
-public class MockShell: ShellExecutor {
+public final class MockShell: ShellExecutor, @unchecked Sendable {
   public typealias ActionHandler = @Sendable (MockShell.Action) -> Void
 
   private let _actionsLock = NSRecursiveLock()
