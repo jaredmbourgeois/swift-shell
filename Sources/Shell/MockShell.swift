@@ -1,23 +1,13 @@
 import Foundation
 
-public final class MockShell: ShellExecutor, @unchecked Sendable {
+public actor MockShell: ShellExecutor, @unchecked Sendable {
   public typealias ActionHandler = @Sendable (MockShell.Action) -> Void
 
-  private let _actionsLock = NSRecursiveLock()
-  private var _actions = [MockShell.Action]()
-  public private(set) var actions: [MockShell.Action] {
-    get {
-      _actionsLock.lock()
-      let value = _actions
-      _actionsLock.unlock()
-      return value
-    }
-    set {
-      _actionsLock.lock()
-      _actions = newValue
-      _actionsLock.unlock()
-    }
-  }
+  public nonisolated let shellPath: String
+  public nonisolated let printsSuccess: Bool
+  public nonisolated let printsFailure: Bool
+
+  public private(set) var actions: [MockShell.Action]
   public var lastAction: MockShell.Action? {
     actions.last
   }
@@ -27,9 +17,16 @@ public final class MockShell: ShellExecutor, @unchecked Sendable {
 
   public init(
     _ commandHandlers: [CommandHandler],
+    shellPath: String = Shell.defaultShellPath,
+    printsSuccess: Bool = false,
+    printsFailure: Bool = false,
     actionHandler: ActionHandler?
   ) {
+    self.actions = []
     self.commandHandlers = commandHandlers
+    self.shellPath = shellPath
+    self.printsSuccess = printsSuccess
+    self.printsFailure = printsFailure
     self.actionHandler = actionHandler
   }
 
@@ -38,13 +35,13 @@ public final class MockShell: ShellExecutor, @unchecked Sendable {
   }
 
   public func `do`(_ command: String, taskPriority: TaskPriority?) async -> Shell.Result {
-    let result = commandHandlers.compactMap { $0.do(command) }.first ?? .failure
+    let result = commandHandlers.compactMap { $0.do(command) }.first ?? .failure("MockShell do not handled: \(command)")
     handleAction(.do(command, result))
     return result
   }
 
   public func sudo(_ command: String, taskPriority: TaskPriority?) async -> Shell.Result {
-    let result = commandHandlers.compactMap { $0.sudo(command) }.first ?? .failure
+    let result = commandHandlers.compactMap { $0.sudo(command) }.first ?? .failure("MockShell sudo not handled: \(command)")
     handleAction(.sudo(command, result))
     return result
   }

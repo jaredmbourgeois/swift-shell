@@ -6,19 +6,23 @@ public enum Shell {
   public enum Result: Equatable {
     case output(String)
     case error(String)
-    case failure
+    case failure(String)
 
     public var description: String {
       switch self {
-      case .output(let string): return string
-      case .error(let string): return string
-      case .failure: return "failure"
+      case .output(let string): return "success(\(string))"
+      case .error(let string): return "error(\(string))"
+      case .failure(let string): return "failure(\(string))"
       }
     }
   }
 }
 
 public protocol ShellExecutor: Sendable {
+  var shellPath: String { get }
+  var printsSuccess: Bool { get }
+  var printsFailure: Bool { get }
+
   func `do`(_ command: String, taskPriority: TaskPriority?) async -> Shell.Result
   func sudo(_ command: String, taskPriority: TaskPriority?) async -> Shell.Result
 }
@@ -36,9 +40,17 @@ extension ShellExecutor {
 extension Shell {
   public actor Executor: ShellExecutor, @unchecked Sendable {
     public nonisolated let shellPath: String
+    public nonisolated let printsSuccess: Bool
+    public nonisolated let printsFailure: Bool
 
-    public init(shellPath: String = Shell.defaultShellPath) {
+    public init(
+      shellPath: String = Shell.defaultShellPath,
+      printsSuccess: Bool = false,
+      printsFailure: Bool = false
+    ) {
       self.shellPath = shellPath
+      self.printsSuccess = printsSuccess
+      self.printsFailure = printsFailure
     }
   }
 }
@@ -58,8 +70,17 @@ extension Shell.Executor {
   ) async -> Shell.Result {
     await withCheckedContinuation { continuation in
       Task(priority: taskPriority) {
-        var result: Shell.Result = .failure
+        let result: Shell.Result
         defer {
+          let prints: Bool
+          switch result {
+          case .output: prints = printsSuccess
+          case .error: prints = printsFailure
+          case .failure: prints = printsFailure
+          }
+          if prints {
+            print("swift-shell\n\tcommand: \(command)\n\tresult: \(result.description)")
+          }
           continuation.resume(with: .success(result))
         }
         let shellUrl = URL(fileURLWithPath: shellPath)
@@ -70,29 +91,27 @@ extension Shell.Executor {
         process.standardOutput = outputPipe
         process.standardError = errorPipe
         process.arguments = ["-c", command]
+        var processError: (any Error)?
         do {
           try Task.checkCancellation()
           try process.run()
           process.waitUntilExit()
-          try Task.checkCancellation()
         } catch {
-          result = .error(String(reflecting: error))
+          processError = error
         }
         guard process.terminationStatus == 0 else {
+          result = .failure("Process terminated with reason: \(process.terminationReason), status: \(process.terminationStatus)")
           return
         }
-        if let output = String(
-          data: outputPipe.fileHandleForReading.readDataToEndOfFile(),
-          encoding: .utf8
-        ) {
+        if let processError {
+          result = .failure("Process error: \(String(reflecting: processError))")
+        } else if let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) {
           result = .output(output)
-        } else if let error = String(
-          data: errorPipe.fileHandleForReading.readDataToEndOfFile(),
-          encoding: .utf8
-        ) {
+        } else if let error = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) {
           result = .error(error)
+        } else {
+          result = .failure("Uknown failure")
         }
-        print("swift-shell\n\tcommand: \(command)\n\tresult: \(result.description)")
       }
     }
   }
