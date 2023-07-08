@@ -4,23 +4,33 @@ public enum Shell {
   public static let defaultShellPath = "/bin/bash"
 
   public enum Result: Equatable {
-    case output(String)
-    case error(String)
+    case standardOutput(String)
+    case standardError(String)
     case failure(String)
 
     public var description: String {
+      let name: String
+      let value: String
       switch self {
-      case .output(let string): return "success(\(string))"
-      case .error(let string): return "error(\(string))"
-      case .failure(let string): return "failure(\(string))"
+      case .standardOutput(let string):
+        name = "output"
+        value = string
+      case .standardError(let string):
+        name = "error"
+        value = string
+      case .failure(let string):
+        name = "failure"
+        value = string
       }
+      let newLine = value.last == "\n" ? "" : "\n"
+      return "\(name)(\n\t\t\(value)\(newLine)\t)"
     }
   }
 }
 
-public protocol ShellExecutor: Sendable {
+public protocol ShellExecutor: AnyActor {
   var shellPath: String { get }
-  var printsSuccess: Bool { get }
+  var printsStandardOutput: Bool { get }
   var printsFailure: Bool { get }
 
   func `do`(_ command: String, taskPriority: TaskPriority?) async -> Shell.Result
@@ -40,16 +50,16 @@ extension ShellExecutor {
 extension Shell {
   public actor Executor: ShellExecutor, @unchecked Sendable {
     public nonisolated let shellPath: String
-    public nonisolated let printsSuccess: Bool
+    public nonisolated let printsStandardOutput: Bool
     public nonisolated let printsFailure: Bool
 
     public init(
       shellPath: String = Shell.defaultShellPath,
-      printsSuccess: Bool = false,
+      printsOutput: Bool = false,
       printsFailure: Bool = false
     ) {
       self.shellPath = shellPath
-      self.printsSuccess = printsSuccess
+      self.printsStandardOutput = printsOutput
       self.printsFailure = printsFailure
     }
   }
@@ -74,8 +84,8 @@ extension Shell.Executor {
         defer {
           let prints: Bool
           switch result {
-          case .output: prints = printsSuccess
-          case .error: prints = printsFailure
+          case .standardOutput: prints = printsStandardOutput
+          case .standardError: prints = printsStandardOutput
           case .failure: prints = printsFailure
           }
           if prints {
@@ -106,9 +116,9 @@ extension Shell.Executor {
         if let processError {
           result = .failure("Process error: \(String(reflecting: processError))")
         } else if let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) {
-          result = .output(output)
+          result = .standardOutput(output)
         } else if let error = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) {
-          result = .error(error)
+          result = .standardError(error)
         } else {
           result = .failure("Uknown failure")
         }

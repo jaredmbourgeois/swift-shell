@@ -4,13 +4,11 @@ public actor MockShell: ShellExecutor, @unchecked Sendable {
   public typealias ActionHandler = @Sendable (MockShell.Action) -> Void
 
   public nonisolated let shellPath: String
-  public nonisolated let printsSuccess: Bool
+  public nonisolated let printsStandardOutput: Bool
   public nonisolated let printsFailure: Bool
 
   public private(set) var actions: [MockShell.Action]
-  public var lastAction: MockShell.Action? {
-    actions.last
-  }
+  public var lastAction: MockShell.Action? { actions.last }
 
   private let commandHandlers: [CommandHandler]
   private let actionHandler: ActionHandler?
@@ -18,14 +16,14 @@ public actor MockShell: ShellExecutor, @unchecked Sendable {
   public init(
     _ commandHandlers: [CommandHandler],
     shellPath: String = Shell.defaultShellPath,
-    printsSuccess: Bool = false,
+    printsStandardOutput: Bool = false,
     printsFailure: Bool = false,
     actionHandler: ActionHandler?
   ) {
     self.actions = []
     self.commandHandlers = commandHandlers
     self.shellPath = shellPath
-    self.printsSuccess = printsSuccess
+    self.printsStandardOutput = printsStandardOutput
     self.printsFailure = printsFailure
     self.actionHandler = actionHandler
   }
