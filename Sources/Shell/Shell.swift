@@ -23,7 +23,7 @@ public enum Shell {
         value = string
       }
       let newLine = value.last == "\n" ? "" : "\n"
-      return "\(name)(\n\t\t\(value)\(newLine)\t)"
+      return "\(name)(\n\(value)\(newLine)\t)"
     }
   }
 }
@@ -89,7 +89,7 @@ extension Shell.Executor {
           case .failure: prints = printsFailure
           }
           if prints {
-            print("swift-shell\n\tcommand: \(command)\n\tresult: \(result.description)")
+            print("swift-shell\n\tcommand:\n\(command)\n\tresult: \(result.description)")
           }
           continuation.resume(with: .success(result))
         }
