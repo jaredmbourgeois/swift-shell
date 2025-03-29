@@ -9,30 +9,26 @@ import Foundation
 
 extension ShellProcessOutput {
     public struct Typed<Output: Sendable & Decodable, Error: Sendable & Decodable>: Sendable {
-        private let shellProcessOutput: ShellProcessOutput
-        public var stdout: Data { shellProcessOutput.stdout }
-        public let stdoutTyped: @Sendable () throws -> Output
-        public var stderr: Data { shellProcessOutput.stderr }
-        public let stderrTyped: @Sendable () throws -> Error
+        public let shellProcessOutput: ShellProcessOutput
+        public let stdoutTyped: Output
+        public let stderrTyped: Error
 
         public init(
             shellProcessOutput: ShellProcessOutput,
             stdoutDecode: @escaping @Sendable (Data) throws -> Output,
             stderrDecode: @escaping @Sendable (Data) throws -> Error
-        ) {
+        ) throws {
             self.shellProcessOutput = shellProcessOutput
-            let stdoutTyped: @Sendable () throws -> Output = { try stdoutDecode(shellProcessOutput.stdout) }
-            self.stdoutTyped = stdoutTyped
-            let stderrTyped: @Sendable () throws -> Error = { try stderrDecode(shellProcessOutput.stderr) }
-            self.stderrTyped = stderrTyped
+            self.stdoutTyped = try stdoutDecode(shellProcessOutput.stdout)
+            self.stderrTyped = try stderrDecode(shellProcessOutput.stderr)
         }
     }
 
     public func typedProcessOutput<Output: Sendable & Decodable, Error: Sendable & Decodable>(
         stdoutDecode: @escaping @Sendable (Data) throws -> Output,
         stderrDecode: @escaping @Sendable (Data) throws -> Error
-    ) -> ShellProcessOutput.Typed<Output, Error> {
-        .init(
+    ) throws -> ShellProcessOutput.Typed<Output, Error> {
+        try .init(
             shellProcessOutput: self,
             stdoutDecode: stdoutDecode,
             stderrDecode: stderrDecode
@@ -42,8 +38,8 @@ extension ShellProcessOutput {
     public func jsonProcessOutput<Output: Sendable & Decodable, Error: Sendable & Decodable>(
         stdoutDecoder: JSONDecoder = JSONDecoder(),
         stderrDecoder: JSONDecoder = JSONDecoder()
-    ) -> ShellProcessOutput.Typed<Output, Error> {
-        .init(
+    ) throws -> ShellProcessOutput.Typed<Output, Error> {
+        try .init(
             shellProcessOutput: self,
             stdoutDecode: { try stdoutDecoder.decode(Output.self, from: $0) },
             stderrDecode: { try stderrDecoder.decode(Error.self, from: $0) }
@@ -55,8 +51,8 @@ extension ShellProcessOutput {
         case decodeOutput(Int)
     }
 
-    public func stringProcessOutput(encoding: String.Encoding = .utf8) -> ShellProcessOutput.Typed<String, String> {
-        .init(
+    public func stringProcessOutput(encoding: String.Encoding = .utf8) throws -> ShellProcessOutput.Typed<String, String> {
+        try .init(
             shellProcessOutput: self,
             stdoutDecode: {
                 guard let data = String(data: $0, encoding: encoding) else {
