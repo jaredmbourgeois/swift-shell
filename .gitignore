@@ -1,0 +1,27 @@
+# SPM
+.build/
+.swiftpm/
+Package.resolved
+
+# macOS
+._*
+.DS_Store
+*.xcodeproj/*
+*.xcworkspace/*
+*.xcscmblueprint
+*.xccheckout
+DerivedData/
+xcuserdata/
+
+# Windows
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# IDEs
+.idea/
+.vscode/
