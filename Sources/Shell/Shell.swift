@@ -7,21 +7,23 @@
 
 import Foundation
 
-public struct Shell: Sendable {
-    public typealias Execute = @Sendable (
-        _ command: ShellCommand,
-        _ dryRun: Bool,
-        _ estimatedOutputSize: Int?,
-        _ estimatedErrorSize: Int?,
-        _ exitStatus: @escaping @Sendable (ShellTermination.Status) -> ShellExitStatus,
-        _ stream: ShellStream?,
-        _ timeout: TimeInterval?
-    ) async -> ShellResult
+public protocol ShellExecutionError: Swift.Error, Equatable, Sendable {}
 
-    private let _execute: Execute
+public typealias ShellExecute<Error: ShellExecutionError> = @Sendable (
+    _ command: ShellCommand,
+    _ dryRun: Bool,
+    _ estimatedOutputSize: Int?,
+    _ estimatedErrorSize: Int?,
+    _ statusesForResult: ShellTermination.StatusesForResult,
+    _ stream: ShellStream?,
+    _ timeout: TimeInterval?
+) async -> ShellResult<Error>
 
-    /// Custom `Shell.Execute` implementation, eg mocking.
-    public init(execute: @escaping Execute) {
+public struct Shell<Error: ShellExecutionError>: Sendable {
+    private let _execute: ShellExecute<Error>
+
+    /// Custom `ShellExecute` implementation, eg mocking.
+    public init(execute: @escaping ShellExecute<Error>) {
         _execute = execute
     }
 
@@ -31,64 +33,23 @@ public struct Shell: Sendable {
         dryRun: Bool = false,
         estimatedOutputSize: Int? = nil,
         estimatedErrorSize: Int? = nil,
-        exitStatus: @escaping @Sendable (ShellTermination.Status) -> ShellExitStatus = {
-            switch $0 {
-            case 0: .success
-            case ShellTermination.statusForCancellationDefault: .cancelled
-            default: .failure
-            }
-        },
+        statusesForResult: ShellTermination.StatusesForResult = .init(),
         stream: ShellStream? = nil,
         timeout: TimeInterval? = nil
-    ) async -> ShellResult {
-        await _execute(command, dryRun, estimatedOutputSize, estimatedErrorSize, exitStatus, stream, timeout)
+    ) async -> ShellResult<Error> {
+        await _execute(command, dryRun, estimatedOutputSize, estimatedErrorSize, statusesForResult, stream, timeout)
     }
 }
 
 public typealias ShellCommand = String
 
-public enum ShellExitStatus: Sendable {
-    case cancelled
-    case failure
-    case success
-}
-
-public struct ShellObserver: Sendable {
-    public let onError: (@Sendable (String, ShellProcessOutput, Data) async -> Void)?
-    public let onOutput: (@Sendable (String, ShellProcessOutput, Data) async -> Void)?
-    public let onResult: (@Sendable (String, ShellResult) async -> Void)?
-
-    public init(
-        onError: (@Sendable (String, ShellProcessOutput, Data) async -> Void)? = nil,
-        onOutput: (@Sendable (String, ShellProcessOutput, Data) async -> Void)? = nil,
-        onResult: (@Sendable (String, ShellResult) async -> Void)? = nil
-    ) {
-        self.onError = onError
-        self.onOutput = onOutput
-        self.onResult = onResult
-    }
-}
-
-public struct ShellProcessOutput: Sendable {
-    public let stderr: Data
-    public let stdout: Data
-
-    public init(
-        stderr: Data,
-        stdout: Data
-    ) {
-        self.stderr = stderr
-        self.stdout = stdout
-    }
-}
-
-public struct ShellResult: Sendable {
-    public let error: ShellError?
+public struct ShellResult<Error: Swift.Error>: Sendable {
+    public let error: Error?
     public let processOutput: ShellProcessOutput
     public let termination: ShellTermination
 
     public init(
-        error: ShellError?,
+        error: Error?,
         processOutput: ShellProcessOutput,
         termination: ShellTermination
     ) {
@@ -97,11 +58,49 @@ public struct ShellResult: Sendable {
         self.termination = termination
     }
 
-    public func get() throws(ShellError) -> ShellProcessOutput {
+    public func get() throws(Error) -> ShellProcessOutput {
         guard let error else {
             return processOutput
         }
         throw error
+    }
+
+    public static func success(
+        stderr: Data = Data(),
+        stdout: Data = Data()
+    ) -> Self {
+        .init(
+            error: nil,
+            processOutput: .init(
+                stderr: stderr,
+                stdout: stdout
+            ),
+            termination: .init(
+                reason: .exit,
+                status: .zero
+            )
+        )
+    }
+    public static func success(
+        stderr: String = "",
+        stdout: String,
+        stringEncoding: String.Encoding = .utf8
+    ) -> Self? {
+        guard let stderrData = stderr.data(using: stringEncoding),
+              let stdoutData = stdout.data(using: stringEncoding) else {
+            return nil
+        }
+        return .init(
+            error: nil,
+            processOutput: .init(
+                stderr: stderrData,
+                stdout: stdoutData
+            ),
+            termination: .init(
+                reason: .exit,
+                status: 0
+            )
+        )
     }
 }
 
@@ -125,8 +124,8 @@ public struct ShellTermination: Sendable {
             }
         }
     }
+
     public typealias Status = Int32
-    public static let statusForCancellationDefault: Int32 = 15
 
     public let reason: Reason
     public let status: Status
@@ -140,62 +139,22 @@ public struct ShellTermination: Sendable {
     }
 }
 
-public actor ShellSerialize {
-    private var running = false
-    private var queue: Array<CheckedContinuation<Void, Never>>
-
-    public init(estimatedCapacity: Int = 16) {
-        queue = Array<CheckedContinuation<Void, Never>>()
-        queue.reserveCapacity(estimatedCapacity)
-    }
-
-    public func callAsFunction<T: Sendable, E: Error>(_ operation: @Sendable () async throws(E) -> T) async throws(E) -> T {
-        guard !running else {
-            await withCheckedContinuation { continuation in
-                queue.append(continuation)
-            }
-            return try await performOperationAndResumeNextInQueue(operation).get()
-        }
-        return try await performOperationAndResumeNextInQueue(operation).get()
-    }
-
-    public func callAsFunction<T: Sendable>(_ operation: @Sendable () async -> T) async -> T {
-        let throwingOperation: @Sendable () async throws(NSError) -> T = { await operation() }
-        return try! await callAsFunction(throwingOperation)
-    }
-
-    private func performOperationAndResumeNextInQueue<T: Sendable, E: Error>(
-        _ operation: @Sendable () async throws(E) -> T
-    ) async -> Result<T, E> {
-        running = true
-        defer {
-            if !queue.isEmpty {
-                queue.removeFirst().resume()
-            } else {
-                running = false
-            }
-        }
-        let result: Result<T, E> = await {
-            do {
-                return .success(try await operation())
-            } catch {
-                return .failure(_forceCastError(error))
-            }
-        }()
-        return result
-    }
+extension ShellTermination.Status {
+    public static var defaultCancellationStatus: Self { 15 }
+    public static var defaultSuccessStatus: Self { 0 }
 }
 
-public struct ShellStream: Sendable {
-    public let onOutput: @Sendable (ShellProcessOutput, Data) async -> Data?
-    public let onError: @Sendable (ShellProcessOutput, Data) async -> Data?
-
-    public init(
-        onOutput: @escaping @Sendable (ShellProcessOutput, Data) async -> Data?,
-        onError: @escaping @Sendable (ShellProcessOutput, Data) async -> Data?
-    ) {
-        self.onOutput = onOutput
-        self.onError = onError
+extension ShellTermination {
+    public struct StatusesForResult: Sendable {
+        public let cancellations: [Status]
+        public let successes: [Status]
+        public init(
+            cancellations: [Status] = [.defaultCancellationStatus],
+            successes: [Status] = [.defaultSuccessStatus]
+        ) {
+            self.cancellations = cancellations
+            self.successes = successes
+        }
     }
 }
 
