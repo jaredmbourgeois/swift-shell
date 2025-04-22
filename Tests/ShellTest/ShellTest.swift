@@ -18,7 +18,7 @@ final class ShellTest: XCTestCase {
     func testShellAtPathEcho() async throws {
         let shell = Shell.atPath()
         let result = await shell.execute("echo 'hello world'")
-        let stringProcessOutput = try result.get().stringProcessOutput()
+        let stringProcessOutput = try result.get().decodeString()
         XCTAssertEqual("hello world\n", stringProcessOutput.stdoutTyped)
         XCTAssertEqual("", stringProcessOutput.stderrTyped)
         XCTAssertEqual(.exit, result.termination.reason)
@@ -29,7 +29,7 @@ final class ShellTest: XCTestCase {
         let shell = Shell.atPath()
         let nonexistantFolder = "/\(UUID())"
         let result = await shell.execute("ls \(nonexistantFolder)")
-        let stringProcessOutput = try result.processOutput.stringProcessOutput()
+        let stringProcessOutput = try result.processOutput.decodeString()
         XCTAssertEqual("ls: \(nonexistantFolder): No such file or directory\n", stringProcessOutput.stdoutTyped)
         XCTAssertTrue(stringProcessOutput.stderrTyped.isEmpty)
         XCTAssertEqual(.exit, result.termination.reason)
@@ -39,28 +39,19 @@ final class ShellTest: XCTestCase {
     func testCommandNotFoundWithTermination() async throws {
         let shell = Shell.atPath()
         let nonexistantCommand = UUID().uuidString
-        let result = await shell.execute(
-            nonexistantCommand,
-            exitStatus: { status in
-                switch status {
-                case 0: .success
-                case 127: .failure
-                default: .failure
-                }
-            }
-        )
-        let stringProcessOutput = try result.processOutput.stringProcessOutput()
+        let result = await shell.execute(nonexistantCommand)
+        let stringProcessOutput = try result.processOutput.decodeString()
         XCTAssertEqual("/bin/bash: \(nonexistantCommand): command not found\n", stringProcessOutput.stdoutTyped)
         XCTAssertEqual("", stringProcessOutput.stderrTyped)
         XCTAssertEqual(127, result.termination.status)
         XCTAssertEqual(.exit, result.termination.reason)
-        XCTAssertEqual("Shell command terminated with error status: 127, reason: exit.", result.error?.userInfo[NSLocalizedDescriptionKey])
+        XCTAssertEqual("Shell.atPath terminated with error status (127).", result.error?.userInfo[NSLocalizedDescriptionKey])
     }
 
     func testCommandWithEnvironmentVariables() async throws {
         let shell = Shell.atPath()
         let result = await shell.execute("echo $HOME")
-        let stringProcessOutput = try result.get().stringProcessOutput()
+        let stringProcessOutput = try result.get().decodeString()
         XCTAssertFalse(stringProcessOutput.stdoutTyped.isEmpty)
         XCTAssertTrue(stringProcessOutput.stdoutTyped.contains("/"))
     }
@@ -68,24 +59,9 @@ final class ShellTest: XCTestCase {
     func testDryRun() async throws {
         let shell = Shell.atPath()
         let result = await shell.execute("ls -la /", dryRun: true)
-        let stringProcessOutput = try result.get().stringProcessOutput()
+        let stringProcessOutput = try result.get().decodeString()
         XCTAssertTrue(stringProcessOutput.stdoutTyped.contains("ls -la /"))
         XCTAssertEqual("", stringProcessOutput.stderrTyped)
-    }
-
-    // MARK: - Custom Exit Status Tests
-
-    func testCustomExitSuccessCriteria() async throws {
-        let shell = Shell.atPath()
-
-        let result = await shell.execute("exit 1", exitStatus: { $0 == 1 ? .success : .failure })
-        XCTAssertNil(result.error)
-        XCTAssertEqual(1, result.termination.status)
-
-        let failureResult = await shell.execute("exit 0", exitStatus: { $0 != 0 ? .success : .failure })
-        XCTAssertNotNil(failureResult.error)
-        XCTAssertEqual(0, failureResult.termination.status)
-        XCTAssertEqual(.terminationError, failureResult.error?.type)
     }
 
     // MARK: - Timeout Tests
@@ -95,7 +71,7 @@ final class ShellTest: XCTestCase {
         // Command that completes before timeout
         let result = await shell.execute("echo 'quick command'", timeout: 1.0)
         XCTAssertNil(result.error)
-        let output = try result.get().stringProcessOutput()
+        let output = try result.get().decodeString()
         XCTAssertEqual("quick command\n", output.stdoutTyped)
     }
 
@@ -105,7 +81,7 @@ final class ShellTest: XCTestCase {
             _ = try await shell.execute("sleep 5", timeout: 0.001).get()
             XCTFail("Timeout error was expected but not thrown")
         } catch {
-            XCTAssertEqual(.timeout, error.type)
+            XCTAssertEqual(.timeout, error.kind)
         }
     }
 
@@ -114,11 +90,11 @@ final class ShellTest: XCTestCase {
         let task = Task {
             await shell.execute("sleep 10")
         }
-        try await Task.sleep(nanoseconds: NSEC_PER_SEC)
+        try await Task.sleep(nanoseconds: 1_000_000_000)
         task.cancel()
         let result = await task.value
         let error = try XCTUnwrap(result.error)
-        XCTAssertEqual(.cancelled, error.type)
+        XCTAssertEqual(.cancelled(.defaultCancellationStatus), error.kind)
     }
 
     // MARK: - Shell Observer Tests
@@ -140,8 +116,8 @@ final class ShellTest: XCTestCase {
                 get { lock.withLock { _capturedError } }
                 set { lock.withLock { _capturedError = newValue } }
             }
-            var _capturedResult: ShellResult?
-            var capturedResult: ShellResult?{
+            var _capturedResult: ShellResult<ShellAtPathError>?
+            var capturedResult: ShellResult<ShellAtPathError>?{
                 get { lock.withLock { _capturedResult } }
                 set { lock.withLock { _capturedResult = newValue } }
             }
@@ -209,32 +185,35 @@ final class ShellTest: XCTestCase {
         let progress = TestProgress<Step>(.waitingForInitialPrompt)
 
         let stream = ShellStream.stringStream(
-            onOutput: { processOutput, incrementalData in
+            onError: { _, _, _ in
+                return nil
+            },
+            onOutput: { processOutput, _, incrementalData in
                 guard let incrementalString = String(data: incrementalData, encoding: .utf8) else {
                     return nil
                 }
 
-                let step = await progress.getStep()
+                let step = progress.getStep()
 
                 switch step {
                 case .waitingForInitialPrompt:
                     if incrementalString.contains("READY: Please enter a command") {
-                        await progress.setStep(.sentCommand)
+                        progress.setStep(.sentCommand)
                         initialPromptExpectation.fulfill()
                         return "echo Testing stream communication\n"
                     }
                 case .sentCommand:
                     if incrementalString.contains("ECHO: Testing stream communication") {
-                        await progress.setStep(.receivedResponse)
+                        progress.setStep(.receivedResponse)
                         responseExpectation.fulfill()
                         if incrementalString.contains("READY: Enter another command") {
-                            await progress.setStep(.sentExitCommand)
+                            progress.setStep(.sentExitCommand)
                             return "exit\n"
                         }
                     }
                 case .receivedResponse:
                     if incrementalString.contains("READY: Enter another command") {
-                        await progress.setStep(.sentExitCommand)
+                        progress.setStep(.sentExitCommand)
                         return "exit\n"
                     }
                 case .sentExitCommand:
@@ -243,9 +222,6 @@ final class ShellTest: XCTestCase {
                     }
                 }
 
-                return nil
-            },
-            onError: { _, incrementalData in
                 return nil
             }
         )
@@ -264,7 +240,7 @@ final class ShellTest: XCTestCase {
         await fulfillment(of: [initialPromptExpectation, responseExpectation, finalResponseExpectation], timeout: timeout)
 
         let result = await task.value
-        let stringOutput = try result.processOutput.stringProcessOutput()
+        let stringOutput = try result.processOutput.decodeString()
 
         // Verify the output contains expected responses
         XCTAssertTrue(stringOutput.stdoutTyped.contains("ECHO: Testing stream communication"))
@@ -272,7 +248,7 @@ final class ShellTest: XCTestCase {
         XCTAssertEqual(result.termination.status, 0)
 
         // Verify the state transitions happened in the expected order
-        let history = await progress.getHistory()
+        let history = progress.getHistory()
         XCTAssertEqual(history.count, 4)
         XCTAssertEqual(history[0], .waitingForInitialPrompt)
         XCTAssertEqual(history[1], .sentCommand)
@@ -305,56 +281,45 @@ final class ShellTest: XCTestCase {
         let progress = TestProgress<Step>(.waitingForInitialPrompt)
 
         let stream = ShellStream.stringStream(
-            onOutput: { processOutput, incrementalData in
+            onError: { processOutputm, _, incrementalData in
                 guard let incrementalString = String(data: incrementalData, encoding: .utf8) else {
                     return nil
                 }
-
-                let step = await progress.getStep()
-                print("onOutput: Current step: \(step), received: \(incrementalString)")
-
-                switch step {
+                if incrementalString.contains("ERROR:") {
+                    Task {
+                        if progress.getStep() == .sentInvalidCommand {
+                            progress.setStep(.receivedError)
+                            errorExpectation.fulfill()
+                        }
+                    }
+                }
+                return nil
+            },
+            onOutput: { processOutput, _, incrementalData in
+                guard let incrementalString = String(data: incrementalData, encoding: .utf8) else {
+                    return nil
+                }
+                switch progress.getStep() {
                 case .waitingForInitialPrompt:
                     if incrementalString.contains("READY: Please enter a command") {
-                        await progress.setStep(.sentInvalidCommand)
+                        progress.setStep(.sentInvalidCommand)
                         return "error\n"
                     }
                 case .sentInvalidCommand:
-                    if incrementalString.contains("READY: Enter another command") {
-                        await progress.setStep(.sentExitCommand)
-                        return "exit\n"
-                    }
+                    break
                 case .receivedError:
                     if incrementalString.contains("READY: Enter another command") {
-                        await progress.setStep(.sentExitCommand)
+                        progress.setStep(.sentExitCommand)
                         return "exit\n"
                     }
                 case .sentExitCommand:
                     if incrementalString.contains("FINAL: exit") {
-                        await progress.setStep(.completed)
+                        progress.setStep(.completed)
                         finalExpectation.fulfill()
                     }
                 case .completed:
                     break
                 }
-                return nil
-            },
-            onError: { processOutput, incrementalData in
-                guard let incrementalString = String(data: incrementalData, encoding: .utf8) else {
-                    return nil
-                }
-
-                print("onError: Received: \(incrementalString)")
-
-                if incrementalString.contains("ERROR:") {
-                    Task {
-                        if await progress.getStep() == .sentInvalidCommand {
-                            await progress.setStep(.receivedError)
-                            errorExpectation.fulfill()
-                        }
-                    }
-                }
-
                 return nil
             }
         )
@@ -373,7 +338,7 @@ final class ShellTest: XCTestCase {
         await fulfillment(of: [errorExpectation, finalExpectation], timeout: timeout)
 
         let result = await task.value
-        let stringProcessOutput = try result.processOutput.stringProcessOutput()
+        let stringProcessOutput = try result.processOutput.decodeString()
 
         XCTAssertEqual(
             "READY: Please enter a command\nRECEIVED: error\nPROCESSING...\nGENERATING ERROR\nERROR: This is an error message\nREADY: Enter another command\nFINAL: exit\nCOMPLETE\n",
@@ -381,7 +346,7 @@ final class ShellTest: XCTestCase {
         )
         XCTAssertEqual("", stringProcessOutput.stderrTyped)
 
-        let history = await progress.getHistory()
+        let history = progress.getHistory()
         XCTAssertEqual(history.count, 5)
         XCTAssertEqual(history[0], .waitingForInitialPrompt)
         XCTAssertEqual(history[1], .sentInvalidCommand)
@@ -434,18 +399,21 @@ final class ShellTest: XCTestCase {
         // Use the stringStream approach like in testStringStreamBasicInteraction
         // This will help us handle the JSON responses more reliably
         let stream = ShellStream.stringStream(
-            onOutput: { processOutput, incrementalData in
+            onError: { _, _, _ in
+                return nil
+            },
+            onOutput: { processOutput, _, incrementalData in
                 guard let responseString = String(data: incrementalData, encoding: .utf8) else {
                     return nil
                 }
 
-                let step = await progress.getStep()
+                let step = progress.getStep()
 
                 switch step {
                 case .waitingForInitialPrompt:
                     // Match the initial JSON pattern
                     if responseString.contains("\"status\": 200") && responseString.contains("\"step\": 1") {
-                        await progress.setStep(.sentFirstCommand)
+                        progress.setStep(.sentFirstCommand)
                         initialPromptExpectation.fulfill()
                         // Return JSON with the query
                         return "{\"query\":\"test query\"}\n"
@@ -453,7 +421,7 @@ final class ShellTest: XCTestCase {
                 case .sentFirstCommand:
                     // Match the response to our first command
                     if responseString.contains("\"query\": \"test query\"") && responseString.contains("\"step\": 2") {
-                        await progress.setStep(.receivedFirstResponse)
+                        progress.setStep(.receivedFirstResponse)
                         responseExpectation.fulfill()
                         // Send second command
                         return "{\"query\":\"exit command\"}\n"
@@ -461,7 +429,7 @@ final class ShellTest: XCTestCase {
                 case .receivedFirstResponse:
                     // Match the final response
                     if responseString.contains("\"step\": 3") && responseString.contains("\"result\"") {
-                        await progress.setStep(.sentExitCommand)
+                        progress.setStep(.sentExitCommand)
                         finalResponseExpectation.fulfill()
                     }
                 case .sentExitCommand:
@@ -469,9 +437,6 @@ final class ShellTest: XCTestCase {
                     break
                 }
 
-                return nil
-            },
-            onError: { _, _ in
                 return nil
             }
         )
@@ -495,7 +460,7 @@ final class ShellTest: XCTestCase {
 
         // Get the task result
         let result = await task.value
-        let stringProcessOutput = try result.processOutput.stringProcessOutput()
+        let stringProcessOutput = try result.processOutput.decodeString()
 
         // Verify expected output
         XCTAssertTrue(stringProcessOutput.stdoutTyped.contains("\"status\": 200"))
@@ -505,7 +470,7 @@ final class ShellTest: XCTestCase {
         XCTAssertEqual(0, result.termination.status)
         
         // Verify the state transitions happened in the expected order
-        let history = await progress.getHistory()
+        let history = progress.getHistory()
         XCTAssertGreaterThanOrEqual(history.count, 3)
         XCTAssertEqual(history[0], .waitingForInitialPrompt)
         XCTAssertEqual(history[1], .sentFirstCommand)
@@ -594,27 +559,31 @@ final class ShellTest: XCTestCase {
     // MARK: - Error Handling Tests
 
     func testErrorPropagation() async throws {
-        let testErrorTypes: [ShellError.ErrorType] = [.cancelled, .input, .run, .terminationError, .timeout]
+        let testErrorTypes: [ShellAtPathError.Kind] = [.cancelled(.defaultCancellationStatus), .streamInputWriteOut, .run, .termination(1), .timeout]
 
         for errorType in testErrorTypes {
-            let customShell = Shell { _, _, _, _, _, _, _ in
-                var error: ShellError
+            let customShell = ShellAtPath { command, _, _, _, _, _, _ in
+                var error: ShellAtPathError
 
                 switch errorType {
                 case .cancelled:
-                    error = .cancelled(description: "Test cancellation")
-                case .input:
-                    error = .input(error: NSError(domain: "test", code: 1),
-                                  input: Data(),
-                                  inputStringEncoding: .utf8)
+                    error = .cancelled(command: command, location: .processExit, status: .defaultCancellationStatus)
+                case .streamInputWriteOut:
+                    error = .streamInputWriteOut(
+                        command: command,
+                        error: NSError(domain: "test", code: 1),
+                        input: Data(),
+                        inputStringEncoding: .utf8
+                    )
                 case .run:
-                    error = .run(error: NSError(domain: "test", code: 2))
-                case .terminationError:
-                    error = .terminationError(termination: .init(reason: .exit, status: 1))
+                    error = .run(command: command, error: NSError(domain: "test", code: 2))
+                case .termination:
+                    error = .termination(command: command, status: 1)
                 case .timeout:
-                    error = .timeout(timeoutInterval: 0.1)
-                case .union:
-                    fatalError()
+                    error = .timeout(command: command, timeoutInterval: 0.1)
+                default:
+                    error = .run(command: command, error: NSError(domain: "test", code: 3))
+                    XCTFail("unexpected \(String(reflecting: errorType))")
                 }
 
                 return .init(
@@ -626,13 +595,13 @@ final class ShellTest: XCTestCase {
 
             let result = await customShell.execute("test")
             XCTAssertNotNil(result.error)
-            XCTAssertEqual(errorType, result.error?.type)
+            XCTAssertEqual(errorType, result.error?.kind)
 
             do {
                 _ = try result.get()
                 XCTFail("Error should have been thrown for \(errorType)")
             } catch {
-                XCTAssertEqual(errorType, error.type)
+                XCTAssertEqual(errorType, error.kind)
             }
         }
     }
@@ -645,9 +614,8 @@ final class ShellTest: XCTestCase {
             do {
                 _ = try await shell.execute("sleep 5").get()
                 XCTFail("Should not complete normally")
-            } catch let error as ShellError {
-                XCTAssertTrue(error.type == .cancelled || error.type == .terminationError,
-                              "Expected .cancelled or .terminationError but got \(error.type)")
+            } catch let error as ShellAtPathError {
+                XCTAssertTrue(error.kind == .cancelled(.defaultCancellationStatus))
                 cancellationExpectation.fulfill()
             } catch {
                 XCTFail("Unexpected error: \(error)")
@@ -655,7 +623,7 @@ final class ShellTest: XCTestCase {
         }
 
         // Wait a bit longer before cancelling to ensure the process starts
-        try await Task.sleep(nanoseconds: NSEC_PER_SEC / 2)
+        try await Task.sleep(nanoseconds: 500_000_000)
         task.cancel()
 
         await fulfillment(of: [cancellationExpectation], timeout: timeout)
@@ -678,7 +646,7 @@ final class ShellTest: XCTestCase {
         let outputJSON = "{\"message\":\"success\",\"count\":42}"
         let errorJSON = "{\"errorMessage\":\"failed\",\"code\":500}"
 
-        let customShell = Shell { _, _, _, _, _, _, _ in
+        let customShell = ShellAtPath { _, _, _, _, _, _, _ in
             .init(
                 error: nil,
                 processOutput: .init(
@@ -692,12 +660,12 @@ final class ShellTest: XCTestCase {
         let result = await customShell.execute("echo test")
 
         // Test manual decoding
-        let typedResult = try result.processOutput.typedProcessOutput(
-            stdoutDecode: { data in
-                try JSONDecoder().decode(CustomOutput.self, from: data)
-            },
+        let typedResult = try result.processOutput.decode(
             stderrDecode: { data in
                 try JSONDecoder().decode(CustomError.self, from: data)
+            },
+            stdoutDecode: { data in
+                try JSONDecoder().decode(CustomOutput.self, from: data)
             }
         )
 
@@ -705,7 +673,7 @@ final class ShellTest: XCTestCase {
         XCTAssertEqual(CustomError(errorMessage: "failed", code: 500), typedResult.stderrTyped)
 
         // Test convenience JSON decoding
-        let jsonResult: ShellProcessOutput.Typed<CustomOutput, CustomError> = try result.processOutput.jsonProcessOutput()
+        let jsonResult: ShellProcessOutput.Decoded<CustomOutput, CustomError> = try result.processOutput.decodeJSON()
         XCTAssertEqual(CustomOutput(message: "success", count: 42), jsonResult.stdoutTyped)
         XCTAssertEqual(CustomError(errorMessage: "failed", code: 500), jsonResult.stderrTyped)
     }
@@ -731,7 +699,9 @@ final class ShellTest: XCTestCase {
 
     // MARK: - Helpers
 
-    private actor TestProgress<Step: Equatable> {
+    private final class TestProgress<Step: Equatable>: @unchecked Sendable {
+        private let lock = NSLock()
+
         private var step: Step
         private var history: [Step] = []
 
@@ -741,16 +711,24 @@ final class ShellTest: XCTestCase {
         }
 
         func getStep() -> Step {
-            step
+            lock.lock()
+            let step = step
+            lock.unlock()
+            return step
         }
 
         func setStep(_ step: Step) {
+            lock.lock()
             self.step = step
             self.history.append(step)
+            lock.unlock()
         }
 
         func getHistory() -> [Step] {
-            history
+            lock.lock()
+            let history = history
+            lock.unlock()
+            return history
         }
     }
 
