@@ -30,8 +30,8 @@ final class ShellTest: XCTestCase {
         let nonexistantFolder = "/\(UUID())"
         let result = await shell.execute("ls \(nonexistantFolder)")
         let stringProcessOutput = try result.processOutput.decodeString()
-        XCTAssertEqual("ls: \(nonexistantFolder): No such file or directory\n", stringProcessOutput.stdoutTyped)
-        XCTAssertTrue(stringProcessOutput.stderrTyped.isEmpty)
+        XCTAssertTrue(stringProcessOutput.stdoutTyped.isEmpty)
+        XCTAssertEqual("ls: \(nonexistantFolder): No such file or directory\n", stringProcessOutput.stderrTyped)
         XCTAssertEqual(.exit, result.termination.reason)
         XCTAssertEqual(1, result.termination.status)
     }
@@ -41,8 +41,8 @@ final class ShellTest: XCTestCase {
         let nonexistantCommand = UUID().uuidString
         let result = await shell.execute(nonexistantCommand)
         let stringProcessOutput = try result.processOutput.decodeString()
-        XCTAssertEqual("/bin/bash: \(nonexistantCommand): command not found\n", stringProcessOutput.stdoutTyped)
-        XCTAssertEqual("", stringProcessOutput.stderrTyped)
+        XCTAssertEqual("", stringProcessOutput.stdoutTyped)
+        XCTAssertEqual("/bin/bash: \(nonexistantCommand): command not found\n", stringProcessOutput.stderrTyped)
         XCTAssertEqual(127, result.termination.status)
         XCTAssertEqual(.exit, result.termination.reason)
         XCTAssertEqual("Shell.atPath terminated with error status (127).", result.error?.userInfo[NSLocalizedDescriptionKey])
@@ -341,10 +341,10 @@ final class ShellTest: XCTestCase {
         let stringProcessOutput = try result.processOutput.decodeString()
 
         XCTAssertEqual(
-            "READY: Please enter a command\nRECEIVED: error\nPROCESSING...\nGENERATING ERROR\nERROR: This is an error message\nREADY: Enter another command\nFINAL: exit\nCOMPLETE\n",
+            "READY: Please enter a command\nRECEIVED: error\nPROCESSING...\nREADY: Enter another command\nFINAL: exit\nCOMPLETE\n",
             stringProcessOutput.stdoutTyped
         )
-        XCTAssertEqual("", stringProcessOutput.stderrTyped)
+        XCTAssertEqual("GENERATING ERROR\nERROR: This is an error message\n", stringProcessOutput.stderrTyped)
 
         let history = progress.getHistory()
         XCTAssertEqual(history.count, 5)
