@@ -191,15 +191,15 @@ extension ShellAtPath {
                             return
                         }
                         taskCancellationHandler.cancelling {
-//                            guard await shouldContinue(from: .stderrReadabilitySerialize) else {
-//                                return
-//                            }
-                            try await serializeIO { () throws(ShellAtPathError) -> Void in
-//                                guard await shouldContinue(from: .stderrReadabilityStart) else {
-//                                    return
-//                                }
+                            guard await shouldContinue(from: .stderrReadabilitySerialize) else {
+                                return
+                            }
+                            await serializeIO {
+                                guard await shouldContinue(from: .stderrReadabilityStart) else {
+                                    return
+                                }
                                 let processOutput = shellProcess.writing {
-                                    $0.stdout += availableData
+                                    $0.stderr += availableData
                                     return $0.makeOutput()
                                 }
                                 defer {
@@ -220,8 +220,8 @@ extension ShellAtPath {
                                     return
                                 }
                                 guard let input,
-                                      input.count > 0 else { //,
-//                                      await shouldContinue(from: .stderrReadabilityWriteInput) else {
+                                      input.count > 0,
+                                      await shouldContinue(from: .stderrReadabilityWriteInput) else {
                                     return
                                 }
                                 do {
