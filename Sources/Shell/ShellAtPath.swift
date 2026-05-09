@@ -78,13 +78,34 @@ extension ShellAtPath {
                             guard shouldTerminate else {
                                 return
                             }
+                            // Drain pipes before snapshotting output. Without this, fast-completing
+                            // processes can return with empty stdout/stderr: the process exits and
+                            // `waitUntilExit()` returns before the readability handlers have flushed
+                            // the last chunks from the pipe's kernel buffer.
+                            //
+                            // The handlers above append synchronously inside `shellProcess.writing`,
+                            // so once we acquire the write lock here we know no in-flight handler
+                            // invocation is mid-append. Nilling the handlers first means Foundation
+                            // won't dispatch new invocations after this point. The final
+                            // `availableData` reads pick up anything the kernel buffered post-EOF
+                            // that no handler will fire for.
+                            //
+                            // Pre-1.4.1 this manifested as silent empty-stdout on macOS / older
+                            // Swift, and as a libdispatch semaphore-wait segfault on Swift 6.3.1 /
+                            // Linux under parallel use.
+                            stderrPipe.fileHandleForReading.readabilityHandler = nil
+                            stdoutPipe.fileHandleForReading.readabilityHandler = nil
+                            shellProcess.writing { state in
+                                let stderrFinal = stderrPipe.fileHandleForReading.availableData
+                                let stdoutFinal = stdoutPipe.fileHandleForReading.availableData
+                                if !stderrFinal.isEmpty { state.stderr += stderrFinal }
+                                if !stdoutFinal.isEmpty { state.stdout += stdoutFinal }
+                            }
                             let processOutput = shellProcess.value.makeOutput()
 
                             try? stdinPipe.fileHandleForWriting.close()
                             try? stderrPipe.fileHandleForReading.close()
                             try? stdoutPipe.fileHandleForReading.close()
-                            stderrPipe.fileHandleForReading.readabilityHandler = nil
-                            stdoutPipe.fileHandleForReading.readabilityHandler = nil
 
                             let (error, termination): (ShellAtPathError?, ShellTermination) = switch terminationReason {
                             case .error(let error): (error, error.termination)
@@ -128,10 +149,24 @@ extension ShellAtPath {
                     }
 
                     stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
-                        let availableData = handle.availableData
+                        // Read pipe + append SYNCHRONOUSLY inside the lock — both as one atomic
+                        // critical section. The pre-1.4.1 architecture deferred the append into a
+                        // `taskCancellationHandler.cancelling` Task that hopped through an actor
+                        // before reaching `shellProcess.writing`. That created a window where the
+                        // kernel pipe buffer had been drained by `availableData` but the data wasn't
+                        // yet in `shellProcess.stdout`. terminateWithReason racing against that
+                        // window saw incomplete output. Reading INSIDE the writing block makes
+                        // read+append indivisible w.r.t. concurrent drains and other handlers.
+                        let (availableData, processOutput) = shellProcess.writing { state -> (Data, ShellProcessOutput) in
+                            let data = handle.availableData
+                            if !data.isEmpty { state.stdout += data }
+                            return (data, state.makeOutput())
+                        }
                         guard !availableData.isEmpty else {
                             return
                         }
+                        // Stream callbacks + observers may be async; they run after the append
+                        // and don't affect captured-output correctness.
                         taskCancellationHandler.cancelling {
                             guard await shouldContinue(from: .stdoutReadabilitySerialize) else {
                                 return
@@ -139,10 +174,6 @@ extension ShellAtPath {
                             await serializeIO {
                                 guard await shouldContinue(from: .stdoutReadabilityStart) else {
                                     return
-                                }
-                                let processOutput = shellProcess.writing {
-                                    $0.stdout += availableData
-                                    return $0.makeOutput()
                                 }
                                 defer {
                                     if let observerOnOutput = shellObserver?.onOutput {
@@ -186,7 +217,13 @@ extension ShellAtPath {
                     }
 
                     stderrPipe.fileHandleForReading.readabilityHandler = { handle in
-                        let availableData = handle.availableData
+                        // Read pipe + append SYNCHRONOUSLY inside the lock (see stdout handler
+                        // comment for rationale).
+                        let (availableData, processOutput) = shellProcess.writing { state -> (Data, ShellProcessOutput) in
+                            let data = handle.availableData
+                            if !data.isEmpty { state.stderr += data }
+                            return (data, state.makeOutput())
+                        }
                         guard !availableData.isEmpty else {
                             return
                         }
@@ -197,10 +234,6 @@ extension ShellAtPath {
                             await serializeIO {
                                 guard await shouldContinue(from: .stderrReadabilityStart) else {
                                     return
-                                }
-                                let processOutput = shellProcess.writing {
-                                    $0.stderr += availableData
-                                    return $0.makeOutput()
                                 }
                                 defer {
                                     if let observerOnError = shellObserver?.onError {

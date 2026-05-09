@@ -4,48 +4,35 @@
 //
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
+// Backed by `NSLock` rather than `pthread_rwlock_t`. Cross-platform (Linux via
+// swift-corelibs-foundation, macOS native), no pthread C-interop, no separate
+// reader/writer modes — the consumers of this type only ever call `writing`.
+// `OSAllocatedUnfairLock` would be Apple-only and explicitly drops fairness, so
+// it's not a fit for a cross-platform shell library.
 
 import Foundation
 
 public final class ReadWriteLock<Value>: @unchecked Sendable {
-    private var lock = pthread_rwlock_t()
+    private let lock = NSLock()
     private var _value: Value
     public var value: Value {
-        get {
-            pthread_rwlock_rdlock(&lock)
-            let value = _value
-            pthread_rwlock_unlock(&lock)
-            return value
-        }
-        set {
-            pthread_rwlock_wrlock(&lock)
-            _value = newValue
-            pthread_rwlock_unlock(&lock)
-        }
+        get { writing { $0 } }
+        set { writing { $0 = newValue } }
     }
 
     public init(_ value: Value) {
-        guard pthread_rwlock_init(&lock, nil) == 0 else {
-            fatalError("pthread_rwlock_init failed")
-        }
         self._value = value
-    }
-
-    deinit {
-        pthread_rwlock_destroy(&lock)
     }
 
     @discardableResult
     public func reading<T>(_ read: (inout Value) throws -> T) rethrows -> T {
-        pthread_rwlock_rdlock(&lock)
-        defer { pthread_rwlock_unlock(&lock) }
-        return try read(&_value)
+        try writing(read)
     }
 
     @discardableResult
-    public func writing<T>(_ read: (inout Value) throws -> T) rethrows -> T {
-        pthread_rwlock_wrlock(&lock)
-        defer { pthread_rwlock_unlock(&lock) }
-        return try read(&_value)
+    public func writing<T>(_ operation: (inout Value) throws -> T) rethrows -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return try operation(&_value)
     }
 }

@@ -697,6 +697,43 @@ final class ShellTest: XCTestCase {
         XCTAssertNotNil(signalResult.error)
     }
 
+    // MARK: - Parallel Execution Tests
+
+    /// Regression test for the pre-1.4.1 pipe-drain race: under parallel execution
+    /// of fast-completing processes, stdout could be lost (silent on macOS / older
+    /// Swift, libdispatch segfault on Swift 6.3.1 / Linux). The fix in
+    /// `terminateWithReason` drains pipes through `serializeIO` before snapshotting
+    /// output. Hammering N concurrent `echo` calls and asserting all return
+    /// non-empty distinct stdout reliably exercises the race.
+    func testParallelExecutionPreservesStdout() async throws {
+        let shell = Shell.atPath()
+        let n = 100
+        let outputs: [String] = await withTaskGroup(of: String.self, returning: [String].self) { group in
+            for i in 0..<n {
+                group.addTask {
+                    let result = await shell.execute("echo bc-test-\(i)")
+                    return (try? result.get().decodeString().stdoutTyped) ?? ""
+                }
+            }
+            var results: [String] = []
+            for await output in group { results.append(output) }
+            return results
+        }
+        XCTAssertEqual(outputs.count, n)
+        for output in outputs {
+            XCTAssertFalse(
+                output.isEmpty,
+                "stdout was empty for one of \(n) parallel processes — pipe-drain race regressed"
+            )
+        }
+        let unique = Set(outputs.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+        XCTAssertEqual(
+            unique.count,
+            n,
+            "expected \(n) distinct outputs; got \(unique.count) — some processes returned wrong stdout"
+        )
+    }
+
     // MARK: - Helpers
 
     private final class TestProgress<Step: Equatable>: @unchecked Sendable {
